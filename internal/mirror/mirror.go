@@ -19,7 +19,6 @@ type Result struct {
 	Err    error
 }
 
-//nolint:unused
 func needsCopy(srcInfo fs.FileInfo, dstPath string) (bool, error) {
 	if dstInfo, err := os.Stat(dstPath); err != nil {
 		if errors.Is(err, os.ErrNotExist) {
@@ -35,13 +34,13 @@ func needsCopy(srcInfo fs.FileInfo, dstPath string) (bool, error) {
 	return false, nil
 }
 
-//nolint:unused
 func copyFile(srcPath, dstPath string) Result {
 	srcInfo, err := os.Stat(srcPath)
 	if err != nil {
 		return Result{Err: err}
 	}
 
+	//nolint:gosec // srcPath is the user-provided source tree to mirror
 	srcFile, err := os.Open(srcPath)
 	if err != nil {
 		return Result{Err: err}

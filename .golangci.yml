@@ -1,9 +1,7 @@
 version: "2"
-run:
-  tests: false
 linters:
   enable:
-    - bodyclose
+    - errorlint
     - exhaustive
     - goconst
     - godot
@@ -14,12 +12,9 @@ linters:
     - nakedret
     - nestif
     - nilerr
-    - noctx
     - nolintlint
     - prealloc
     - revive
-    - rowserrcheck
-    - sqlclosecheck
     - tparallel
     - unconvert
     - unparam
@@ -27,12 +22,9 @@ linters:
     - wrapcheck
   exclusions:
     rules:
-      - text: '(slog|log)\.\w+'
+      - path: _test\.go
         linters:
-          - noctx
-    generated: lax
-    presets:
-      - common-false-positives
+          - gosec
   settings:
     exhaustive:
       default-signifies-exhaustive: true
