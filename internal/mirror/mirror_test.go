@@ -118,7 +118,7 @@ func TestCopyFile(t *testing.T) {
 		}
 
 		for _, entry := range entries {
-			if strings.HasPrefix(entry.Name(), ".backup") {
+			if strings.HasPrefix(entry.Name(), ".bkp") {
 				t.Errorf("copyFile() left temp file %s", entry.Name())
 			}
 		}
@@ -159,7 +159,7 @@ func TestCopyFile(t *testing.T) {
 		}
 
 		for _, entry := range entries {
-			if strings.HasPrefix(entry.Name(), ".backup") {
+			if strings.HasPrefix(entry.Name(), ".bkp") {
 				t.Errorf("copyFile() left temp file %s", entry.Name())
 			}
 		}

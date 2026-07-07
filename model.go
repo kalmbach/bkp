@@ -8,7 +8,7 @@ import (
 	"charm.land/lipgloss/v2"
 
 	"github.com/dustin/go-humanize"
-	"github.com/kalmbach/backup/internal/mirror"
+	"github.com/kalmbach/bkp/internal/mirror"
 )
 
 // Catppuccin Mocha subset — https://catppuccin.com/palette

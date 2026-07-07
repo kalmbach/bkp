@@ -1,4 +1,4 @@
-module github.com/kalmbach/backup
+module github.com/kalmbach/bkp
 
 go 1.26.1
 
