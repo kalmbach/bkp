@@ -10,6 +10,64 @@ import (
 	"time"
 )
 
+func TestScan(t *testing.T) {
+	testData := []byte("hello world!")
+
+	srcPath := t.TempDir()
+	dstPath := t.TempDir()
+
+	numOfFiles := 0
+	numOfBytes := 0
+	for x := range 10 {
+		f, err := os.CreateTemp(srcPath, "*.bkp")
+		if err != nil {
+			t.Fatal(err)
+		}
+
+		writtenBytes, err := f.Write(testData)
+		if err != nil {
+			t.Fatal(err)
+		}
+
+		if err := f.Close(); err != nil {
+			t.Fatal(err)
+		}
+
+		if x%2 == 0 {
+			// copy file so scan sees it and skips it
+			dst := filepath.Join(dstPath, filepath.Base(f.Name()))
+			if err := os.WriteFile(dst, testData, 0o644); err != nil {
+				t.Fatal(err)
+			}
+
+			info, err := os.Stat(f.Name())
+			if err != nil {
+				t.Fatal(err)
+			}
+
+			if err := os.Chtimes(dst, info.ModTime(), info.ModTime()); err != nil {
+				t.Fatal(err)
+			}
+		} else {
+			numOfBytes += writtenBytes
+			numOfFiles++
+		}
+	}
+
+	files, bytes, err := Scan(srcPath, dstPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	if files != numOfFiles {
+		t.Errorf("scan(){files} = %d; want %d", files, numOfFiles)
+	}
+
+	if bytes != int64(numOfBytes) {
+		t.Errorf("scan(){bytes} = %d; want %d", bytes, numOfBytes)
+	}
+}
+
 func TestNeedsCopy(t *testing.T) {
 	fileName := "test"
 	fileData := "hello world!"
