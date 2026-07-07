@@ -1,5 +1,7 @@
-// Package mirror copies a source directory tree into a destination,
-// skipping files whose size and mtime already match.
+// Package mirror provides functions to:
+// - detect if a file needs to be backed up by checking if the file exists
+// in the vault, if it has a different Size or a different mtime.
+// - copy the file to the destination vault, preserving the mtime and mode.
 package mirror
 
 import (
@@ -17,6 +19,48 @@ type Result struct {
 	Bytes  int64
 	Copied bool
 	Err    error
+}
+
+// Scan walks src and reports the number of regular files needing copy to
+// dst and their total size in bytes.
+func Scan(src, dst string) (files int, bytes int64, err error) {
+	err = filepath.WalkDir(src, func(path string, d fs.DirEntry, err error) error {
+		if err != nil {
+			return err
+		}
+
+		if d.IsDir() || !d.Type().IsRegular() {
+			return nil
+		}
+
+		rel, err := filepath.Rel(src, path)
+		if err != nil {
+			return fmt.Errorf("rel %s: %w", path, err)
+		}
+
+		dstPath := filepath.Join(dst, rel)
+		info, err := d.Info()
+		if err != nil {
+			return fmt.Errorf("info %s: %w", path, err)
+		}
+
+		need, err := needsCopy(info, dstPath)
+		if err != nil {
+			return err
+		}
+
+		if need {
+			files++
+			bytes += info.Size()
+		}
+
+		return nil
+	})
+	if err != nil {
+		return files, bytes, fmt.Errorf("scan %s: %w", src, err)
+	}
+
+	return files, bytes, nil
 }
 
 func needsCopy(srcInfo fs.FileInfo, dstPath string) (bool, error) {
