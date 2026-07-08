@@ -42,8 +42,7 @@ const (
 )
 
 type scanDoneMsg struct {
-	files int
-	bytes int64
+	tasks []mirror.Task
 	err   error
 }
 
@@ -52,15 +51,14 @@ type model struct {
 	dst string
 
 	phase scanPhase
-	files int
-	bytes int64
+	tasks []mirror.Task
 	err   error
 }
 
 func scanCmd(src, dst string) tea.Cmd {
 	return func() tea.Msg {
-		files, bytes, err := mirror.Scan(src, dst)
-		return scanDoneMsg{files: files, bytes: bytes, err: err}
+		tasks, err := mirror.Scan(src, dst)
+		return scanDoneMsg{tasks: tasks, err: err}
 	}
 }
 
@@ -85,7 +83,7 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			return m, nil
 		}
 
-		m.phase, m.files, m.bytes = phaseScanned, msg.files, msg.bytes
+		m.phase, m.tasks = phaseScanned, msg.tasks
 	}
 
 	return m, nil
@@ -104,10 +102,15 @@ func (m model) View() tea.View {
 		s.WriteString(warningStyle.Render("Scanning...") + "\n")
 
 	case phaseScanned:
-		files := fmt.Sprintf("%d", m.files)
+		files := fmt.Sprintf("%d", len(m.tasks))
 
 		// byte total is a sum of file sizes, always non-negative
-		size := humanize.Bytes(uint64(m.bytes)) //nolint:gosec
+		var bytes int64
+		for _, t := range m.tasks {
+			bytes += t.Size
+		}
+
+		size := humanize.Bytes(uint64(bytes))
 
 		s.WriteString(boldStyle.Render(files) + " files to copy.\n")
 		s.WriteString(boldStyle.Render(size) + " total\n")

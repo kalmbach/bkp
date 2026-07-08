@@ -10,14 +10,36 @@ import (
 	"time"
 )
 
+func TestSweep(t *testing.T) {
+	dstPath := t.TempDir()
+	f, err := os.CreateTemp(dstPath, prefix+"*")
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	removed, err := Sweep(dstPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	if removed != 1 {
+		t.Errorf("Sweep(): %d, want: 1", removed)
+	}
+
+	_, err = os.Stat(f.Name())
+	if err == nil {
+		t.Errorf("Stat(%s): nil, wanted error", f.Name())
+	}
+}
+
 func TestScan(t *testing.T) {
 	testData := []byte("hello world!")
 
 	srcPath := t.TempDir()
 	dstPath := t.TempDir()
 
-	numOfFiles := 0
-	numOfBytes := 0
+	wantedFiles := 0
+	wantedBytes := 0
 	for x := range 10 {
 		f, err := os.CreateTemp(srcPath, "*.bkp")
 		if err != nil {
@@ -49,22 +71,28 @@ func TestScan(t *testing.T) {
 				t.Fatal(err)
 			}
 		} else {
-			numOfBytes += writtenBytes
-			numOfFiles++
+			wantedBytes += writtenBytes
+			wantedFiles++
 		}
 	}
 
-	files, bytes, err := Scan(srcPath, dstPath)
+	tasks, err := Scan(srcPath, dstPath)
 	if err != nil {
 		t.Fatal(err)
 	}
 
-	if files != numOfFiles {
-		t.Errorf("scan(){files} = %d; want %d", files, numOfFiles)
+	scannedFiles := len(tasks)
+	if scannedFiles != wantedFiles {
+		t.Errorf("scan(){files} = %d; want %d", scannedFiles, wantedFiles)
 	}
 
-	if bytes != int64(numOfBytes) {
-		t.Errorf("scan(){bytes} = %d; want %d", bytes, numOfBytes)
+	var scannedBytes int64
+	for _, t := range tasks {
+		scannedBytes += t.Size
+	}
+
+	if scannedBytes != int64(wantedBytes) {
+		t.Errorf("scan(){bytes} = %d; want %d", scannedBytes, wantedBytes)
 	}
 }
 

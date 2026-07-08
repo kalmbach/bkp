@@ -11,7 +11,10 @@ import (
 	"io/fs"
 	"os"
 	"path/filepath"
+	"strings"
 )
+
+const prefix string = ".bkp-"
 
 // Result reports the outcome of copying a single file.
 type Result struct {
@@ -21,9 +24,16 @@ type Result struct {
 	Err    error
 }
 
+// Task describes a single file to be copied from Src to Dst.
+type Task struct {
+	Src  string
+	Dst  string
+	Size int64
+}
+
 // Scan walks src and reports the number of regular files needing copy to
 // dst and their total size in bytes.
-func Scan(src, dst string) (files int, bytes int64, err error) {
+func Scan(src, dst string) (tasks []Task, err error) {
 	err = filepath.WalkDir(src, func(path string, d fs.DirEntry, err error) error {
 		if err != nil {
 			return err
@@ -50,17 +60,56 @@ func Scan(src, dst string) (files int, bytes int64, err error) {
 		}
 
 		if need {
-			files++
-			bytes += info.Size()
+			tasks = append(tasks, Task{Src: path, Dst: dstPath, Size: info.Size()})
 		}
 
 		return nil
 	})
 	if err != nil {
-		return files, bytes, fmt.Errorf("scan %s: %w", src, err)
+		return tasks, fmt.Errorf("scan %s: %w", src, err)
 	}
 
-	return files, bytes, nil
+	return tasks, nil
+}
+
+// Sweep removes orphaned .bkp-* tmpfiles left in dst by copies that were
+// interrupted before their rename (e.g. power loss).
+func Sweep(dst string) (removed int, err error) {
+	root, err := os.OpenRoot(dst)
+	if err != nil {
+		if errors.Is(err, os.ErrNotExist) {
+			return 0, nil // no vault yet, nothing to sweep
+		}
+
+		return 0, fmt.Errorf("open root %s: %w", dst, err)
+	}
+
+	err = fs.WalkDir(root.FS(), ".", func(path string, d fs.DirEntry, err error) error {
+		if err != nil {
+			return err
+		}
+
+		if d.IsDir() || !d.Type().IsRegular() {
+			return nil
+		}
+
+		if !strings.HasPrefix(d.Name(), prefix) {
+			return nil
+		}
+
+		// root-scoped, symlink-safe
+		if err := root.Remove(path); err != nil {
+			return fmt.Errorf("remove %s: %w", path, err)
+		}
+		removed++
+
+		return nil
+	})
+	if err != nil {
+		return removed, fmt.Errorf("sweep %s: %w", dst, err)
+	}
+
+	return removed, nil
 }
 
 func needsCopy(srcInfo fs.FileInfo, dstPath string) (bool, error) {
@@ -91,7 +140,7 @@ func copyFile(srcPath, dstPath string) Result {
 	}
 	defer func() { _ = srcFile.Close() }()
 
-	tmpFile, err := os.CreateTemp(filepath.Dir(dstPath), ".backup-*")
+	tmpFile, err := os.CreateTemp(filepath.Dir(dstPath), prefix+"*")
 	if err != nil {
 		return Result{Err: err}
 	}
@@ -105,11 +154,6 @@ func copyFile(srcPath, dstPath string) Result {
 
 	copied, err := io.Copy(tmpFile, srcFile)
 	if err != nil {
-		return Result{Err: err}
-	}
-
-	// Flush the file before renaming
-	if err := tmpFile.Close(); err != nil {
 		return Result{Err: err}
 	}
 
