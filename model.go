@@ -33,13 +33,19 @@ func renderHeader(title string) string {
 	return lipgloss.JoinHorizontal(lipgloss.Top, logo, "  ", info)
 }
 
-type scanPhase int
+type bkpPhase int
 
 const (
-	phaseScanning scanPhase = iota
+	phaseSweeping bkpPhase = iota
+	phaseScanning
 	phaseScanned
 	phaseError
 )
+
+type sweepDoneMsg struct {
+	removed int
+	err     error
+}
 
 type scanDoneMsg struct {
 	tasks []mirror.Task
@@ -50,9 +56,16 @@ type model struct {
 	src string
 	dst string
 
-	phase scanPhase
+	phase bkpPhase
 	tasks []mirror.Task
 	err   error
+}
+
+func sweepCmd(dst string) tea.Cmd {
+	return func() tea.Msg {
+		removed, err := mirror.Sweep(dst)
+		return sweepDoneMsg{removed: removed, err: err}
+	}
 }
 
 func scanCmd(src, dst string) tea.Cmd {
@@ -67,7 +80,7 @@ func newModel(src, dst string) model {
 }
 
 func (m model) Init() tea.Cmd {
-	return scanCmd(m.src, m.dst)
+	return sweepCmd(m.dst)
 }
 
 func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
@@ -77,6 +90,14 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		case "esc", "q":
 			return m, tea.Quit
 		}
+	case sweepDoneMsg:
+		if msg.err != nil {
+			m.phase, m.err = phaseError, msg.err
+			return m, nil
+		}
+
+		m.phase = phaseScanning
+		return m, scanCmd(m.src, m.dst)
 	case scanDoneMsg:
 		if msg.err != nil {
 			m.phase, m.err = phaseError, msg.err
@@ -98,6 +119,9 @@ func (m model) View() tea.View {
 	s.WriteString(boldStyle.Render("Dst Dir: ") + m.dst + "\n")
 	s.WriteString("\n")
 	switch m.phase {
+	case phaseSweeping:
+		s.WriteString(warningStyle.Render("Removing orphaned tempfiles...") + "\n")
+
 	case phaseScanning:
 		s.WriteString(warningStyle.Render("Scanning...") + "\n")
 
