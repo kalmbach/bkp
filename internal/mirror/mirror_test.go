@@ -76,18 +76,18 @@ func TestScan(t *testing.T) {
 		}
 	}
 
-	tasks, err := Scan(srcPath, dstPath)
+	scan, err := Scan(srcPath, dstPath)
 	if err != nil {
 		t.Fatal(err)
 	}
 
-	scannedFiles := len(tasks)
+	scannedFiles := len(scan.Tasks)
 	if scannedFiles != wantedFiles {
 		t.Errorf("scan(){files} = %d; want %d", scannedFiles, wantedFiles)
 	}
 
 	var scannedBytes int64
-	for _, t := range tasks {
+	for _, t := range scan.Tasks {
 		scannedBytes += t.Size
 	}
 
@@ -164,7 +164,8 @@ func TestCopyFile(t *testing.T) {
 
 	t.Run("copied", func(t *testing.T) {
 		dstPath := filepath.Join(t.TempDir(), fileName)
-		result := copyFile(srcPath, dstPath)
+		task := Task{Src: srcPath, Dst: dstPath}
+		result := copyFile(task.Src, task.Dst, task.Progress)
 		if result.Err != nil {
 			t.Errorf("copyFile() returned error = %v", result.Err)
 		}
@@ -217,7 +218,8 @@ func TestCopyFile(t *testing.T) {
 		}
 		defer func() { _ = os.Chmod(dstDir, 0o700) }()
 
-		result := copyFile(srcPath, filepath.Join(dstDir, fileName))
+		task := Task{Src: srcPath, Dst: filepath.Join(dstDir, fileName)}
+		result := copyFile(task.Src, task.Dst, task.Progress)
 		if result.Err == nil {
 			t.Errorf("copyFile() expected error writing read only directory")
 		}
@@ -234,7 +236,8 @@ func TestCopyFile(t *testing.T) {
 			t.Fatal(err)
 		}
 
-		result := copyFile(srcPath, dstPath)
+		task := Task{Src: srcPath, Dst: dstPath}
+		result := copyFile(task.Src, task.Dst, task.Progress)
 		if result.Err == nil {
 			t.Error("copyFile() expected error renaming onto a directory")
 		}

@@ -23,7 +23,6 @@ func main() {
 	flag.BoolVar(&showVersion, "version", false, "print version and exit")
 	flag.BoolVar(&showVersion, "v", false, "print version and exit (shorthand)")
 	flag.StringVar(&dstPath, "dst", "", "destination directory")
-	flag.StringVar(&srcPath, "src", "", "source directory")
 	flag.Parse()
 
 	if showVersion {
@@ -31,23 +30,9 @@ func main() {
 		return
 	}
 
-	if len(srcPath) == 0 {
-		homePath, err := os.UserHomeDir()
-		if err != nil {
-			log.Fatalf("%v", err)
-		}
-
-		srcPath = homePath
-	}
-
-	srcInfo, err := os.Stat(srcPath)
+	srcPath, err := os.UserHomeDir()
 	if err != nil {
 		log.Fatalf("%v", err)
-	}
-
-	if !srcInfo.IsDir() {
-		log.Println("Source path is not a directory.")
-		return
 	}
 
 	dstInfo, err := os.Stat(dstPath)

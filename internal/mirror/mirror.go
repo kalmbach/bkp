@@ -12,6 +12,7 @@ import (
 	"os"
 	"path/filepath"
 	"strings"
+	"sync/atomic"
 )
 
 const prefix string = ".bkp-"
@@ -26,14 +27,46 @@ type Result struct {
 
 // Task describes a single file to be copied from Src to Dst.
 type Task struct {
-	Src  string
-	Dst  string
-	Size int64
+	Src      string
+	Dst      string
+	Size     int64
+	Progress *atomic.Int64
+	Done     bool
+}
+
+// ScanResult describes the total number of files to be copied and
+// the total number of bytes scanned.
+type ScanResult struct {
+	Tasks []Task
+	Files int64
+	Bytes int64
+}
+
+type progressWriter struct {
+	w io.Writer
+	n *atomic.Int64
+}
+
+func (pw progressWriter) Write(b []byte) (int, error) {
+	n, err := pw.w.Write(b)
+	pw.n.Add(int64(n))
+
+	if err != nil {
+		return n, fmt.Errorf("write: %w", err)
+	}
+
+	return n, nil
+}
+
+// Copy mirrors task.Src to task.Dst via an atomic temp-file rename,
+// preserving mode and mtime, and reports bytes written through task.Progress.
+func Copy(task Task) Result {
+	return copyFile(task.Src, task.Dst, task.Progress)
 }
 
 // Scan walks src and reports the number of regular files needing copy to
 // dst and their total size in bytes.
-func Scan(src, dst string) (tasks []Task, err error) {
+func Scan(src, dst string) (r ScanResult, err error) {
 	err = filepath.WalkDir(src, func(path string, d fs.DirEntry, err error) error {
 		if err != nil {
 			return err
@@ -54,22 +87,25 @@ func Scan(src, dst string) (tasks []Task, err error) {
 			return fmt.Errorf("info %s: %w", path, err)
 		}
 
+		r.Files++
+		r.Bytes += info.Size()
+
 		need, err := needsCopy(info, dstPath)
 		if err != nil {
 			return err
 		}
 
 		if need {
-			tasks = append(tasks, Task{Src: path, Dst: dstPath, Size: info.Size()})
+			r.Tasks = append(r.Tasks, Task{Src: path, Dst: dstPath, Size: info.Size(), Done: false})
 		}
 
 		return nil
 	})
 	if err != nil {
-		return tasks, fmt.Errorf("scan %s: %w", src, err)
+		return r, fmt.Errorf("scan %s: %w", src, err)
 	}
 
-	return tasks, nil
+	return r, nil
 }
 
 // Sweep removes orphaned .bkp-* tmpfiles left in dst by copies that were
@@ -127,7 +163,11 @@ func needsCopy(srcInfo fs.FileInfo, dstPath string) (bool, error) {
 	return false, nil
 }
 
-func copyFile(srcPath, dstPath string) Result {
+func copyFile(srcPath, dstPath string, progress *atomic.Int64) Result {
+	if progress == nil {
+		progress = new(atomic.Int64)
+	}
+
 	srcInfo, err := os.Stat(srcPath)
 	if err != nil {
 		return Result{Err: err}
@@ -139,6 +179,16 @@ func copyFile(srcPath, dstPath string) Result {
 		return Result{Err: err}
 	}
 	defer func() { _ = srcFile.Close() }()
+
+	srcDir := filepath.Dir(srcPath)
+	dirInfo, err := os.Stat(srcDir)
+	if err != nil {
+		return Result{Err: err}
+	}
+
+	if err := os.MkdirAll(filepath.Dir(dstPath), dirInfo.Mode().Perm()); err != nil {
+		return Result{Err: err}
+	}
 
 	tmpFile, err := os.CreateTemp(filepath.Dir(dstPath), prefix+"*")
 	if err != nil {
@@ -152,7 +202,7 @@ func copyFile(srcPath, dstPath string) Result {
 	}()
 	defer func() { _ = tmpFile.Close() }()
 
-	copied, err := io.Copy(tmpFile, srcFile)
+	copied, err := io.Copy(progressWriter{tmpFile, progress}, srcFile)
 	if err != nil {
 		return Result{Err: err}
 	}
