@@ -7,6 +7,7 @@ import (
 	"time"
 
 	"charm.land/bubbles/v2/progress"
+	"charm.land/bubbles/v2/spinner"
 	tea "charm.land/bubbletea/v2"
 	"charm.land/lipgloss/v2"
 
@@ -24,18 +25,18 @@ var (
 
 	logoStyle    = lipgloss.NewStyle().Foreground(mochaMauve).Bold(true)
 	titleStyle   = lipgloss.NewStyle().Foreground(mochaMauve).Bold(true)
-	boldStyle    = lipgloss.NewStyle().Foreground(mochaText).Bold(true)
+	normalStyle  = lipgloss.NewStyle().Foreground(mochaText)
 	faintStyle   = lipgloss.NewStyle().Foreground(mochaOverlay0)
 	warningStyle = lipgloss.NewStyle().Foreground(mochaPeach)
 )
 
 const logoArt = "▐▛███▜▌\n▝▜█████▛▘\n  ▘▘ ▝▝"
 
-func renderHeader() string {
+func renderHeader(dst string) string {
 	l := "\n" + logoStyle.Render(logoArt)
-	t := "\n" + titleStyle.Render("bkp")
-	v := "\n" + faintStyle.Render("v"+version)
-	return lipgloss.JoinHorizontal(lipgloss.Top, l, " ", t+v)
+	t := "\n" + titleStyle.Render("bkp - v"+version)
+	d := "\n" + faintStyle.Render("home -> "+dst)
+	return lipgloss.JoinHorizontal(lipgloss.Top, l, " ", t+d)
 }
 
 type bkpPhase int
@@ -48,6 +49,14 @@ const (
 	phaseQuitting
 	phaseError
 )
+
+func (p bkpPhase) busy() bool {
+	switch p {
+	case phaseSweeping, phaseScanning, phaseCopying:
+		return true
+	}
+	return false
+}
 
 const tickInterval = 100 * time.Millisecond
 
@@ -85,8 +94,8 @@ type model struct {
 	current int
 	err     error
 
-	bar      progress.Model
-	phaseBar progress.Model
+	bar  progress.Model
+	spin spinner.Model
 }
 
 func tickCmd() tea.Cmd {
@@ -121,20 +130,20 @@ func copyCmd(task mirror.Task) tea.Cmd {
 
 func newModel(src, dst string) model {
 	bar := progress.New(
-		progress.WithColors(mochaMauve, mochaPeach),
+		progress.WithColors(mochaPeach, mochaMauve),
 		progress.WithWidth(40),
 	)
 
-	phaseBar := progress.New(
-		progress.WithColors(mochaMauve, mochaPeach),
-		progress.WithWidth(20),
+	spin := spinner.New(
+		spinner.WithSpinner(spinner.Pulse),
+		spinner.WithStyle(warningStyle),
 	)
 
-	return model{src: src, dst: dst, scanned: false, bar: bar, phaseBar: phaseBar}
+	return model{src: src, dst: dst, scanned: false, bar: bar, spin: spin}
 }
 
 func (m model) Init() tea.Cmd {
-	return sweepCmd(m.dst)
+	return tea.Batch(sweepCmd(m.dst), m.spin.Tick)
 }
 
 func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
@@ -153,13 +162,21 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 				m.phase = phaseCopying
 				m.tasks[m.current].Progress = new(atomic.Int64)
 
-				return m, tea.Batch(copyCmd(m.tasks[m.current]), tickCmd())
+				return m, tea.Batch(copyCmd(m.tasks[m.current]), tickCmd(), m.spin.Tick)
 			}
 
 			if m.phase == phaseCopying {
 				m.phase = phaseScanned
 			}
 		}
+	case spinner.TickMsg:
+		if !m.phase.busy() {
+			return m, nil
+		}
+
+		var cmd tea.Cmd
+		m.spin, cmd = m.spin.Update(msg)
+		return m, cmd
 	case sweepDoneMsg:
 		if msg.err != nil {
 			m.phase, m.err = phaseError, msg.err
@@ -167,7 +184,7 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		}
 
 		m.phase = phaseScanning
-		return m, scanCmd(m.src, m.dst)
+		return m, tea.Batch(scanCmd(m.src, m.dst), m.spin.Tick)
 	case scanDoneMsg:
 		if msg.err != nil {
 			m.phase, m.err = phaseError, msg.err
@@ -195,7 +212,7 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		if m.phase == phaseCopying {
 			if m.current >= len(m.tasks) {
 				m.phase = phaseScanning
-				return m, scanCmd(m.src, m.dst)
+				return m, tea.Batch(scanCmd(m.src, m.dst), m.spin.Tick)
 			}
 			m.tasks[m.current].Progress = new(atomic.Int64)
 			return m, copyCmd(m.tasks[m.current])
@@ -216,9 +233,9 @@ func (m model) PhaseView(task mirror.Task) string {
 	}
 
 	s.WriteString(
-		warningStyle.Render(
-			fmt.Sprintf("copying %s: ", crumbs.Truncate(task.Dst, 60)),
-		) + m.phaseBar.ViewAs(fraction) + "\n",
+		m.spin.View() + " " + warningStyle.Render(
+			fmt.Sprintf("%d%% %s", int(fraction*100), crumbs.Truncate(task.Dst, 40)),
+		) + "\n",
 	)
 	return s.String()
 }
@@ -236,26 +253,19 @@ func (m model) BackupView() string {
 	}
 
 	if files > 0 {
-		var percentage int
 		var fraction float64
 		if m.bytes > 0 {
-			percentage = int((m.bytes - bytes) * 100 / m.bytes)
 			fraction = float64(m.bytes-bytes) / float64(m.bytes)
 		} else {
-			percentage = int((m.files - files) * 100 / m.files)
 			fraction = float64(m.files-files) / float64(m.files)
 		}
 
 		size := humanize.Bytes(uint64(bytes))
 
-		s.WriteString(boldStyle.Render("home is") + titleStyle.Render(fmt.Sprintf(" %d%% ", percentage)) + boldStyle.Render("backed up") + "\n")
-		s.WriteString(boldStyle.Render(fmt.Sprintf("%d (%s) files to copy.", files, size)) + "\n")
-
-		if m.phase == phaseCopying {
-			s.WriteString("\n" + m.bar.ViewAs(fraction) + "\n")
-		}
+		s.WriteString(m.bar.ViewAs(fraction) + "\n")
+		s.WriteString(normalStyle.Render(fmt.Sprintf("%d (%s) files to sync.", files, size)) + "\n")
 	} else {
-		s.WriteString(boldStyle.Render("home is backed up.\n"))
+		s.WriteString(normalStyle.Render("Nothing to sync.\n"))
 	}
 
 	return s.String()
@@ -263,15 +273,14 @@ func (m model) BackupView() string {
 
 func (m model) View() tea.View {
 	var s strings.Builder
-	s.WriteString(renderHeader() + "\n\n")
-	s.WriteString(boldStyle.Render("Vault: ") + m.dst + "\n")
-	s.WriteString("\n")
+	s.WriteString(renderHeader(m.dst))
+	s.WriteString("\n\n")
 	switch m.phase {
 	case phaseSweeping:
-		s.WriteString(warningStyle.Render("Removing orphaned tempfiles...") + "\n")
+		s.WriteString(m.spin.View() + " " + warningStyle.Render("Removing orphaned tempfiles...") + "\n")
 
 	case phaseScanning:
-		s.WriteString(warningStyle.Render("Scanning...") + "\n")
+		s.WriteString(m.spin.View() + " " + warningStyle.Render("Scanning...") + "\n")
 
 	case phaseScanned:
 		s.WriteString(m.BackupView())
