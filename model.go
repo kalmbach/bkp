@@ -54,6 +54,8 @@ func (p bkpPhase) busy() bool {
 	switch p {
 	case phaseSweeping, phaseScanning, phaseCopying:
 		return true
+	case phaseScanned, phaseQuitting, phaseError:
+		return false
 	}
 	return false
 }
