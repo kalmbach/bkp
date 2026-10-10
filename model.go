@@ -1,6 +1,8 @@
 package main
 
 import (
+	"context"
+	"errors"
 	"fmt"
 	"strings"
 	"sync/atomic"
@@ -46,15 +48,16 @@ const (
 	phaseScanning
 	phaseScanned
 	phaseCopying
+	phaseStopping
 	phaseQuitting
 	phaseError
 )
 
 func (p bkpPhase) busy() bool {
 	switch p {
-	case phaseSweeping, phaseScanning, phaseCopying:
+	case phaseSweeping, phaseScanning, phaseCopying, phaseStopping, phaseQuitting:
 		return true
-	case phaseScanned, phaseQuitting, phaseError:
+	case phaseScanned, phaseError:
 		return false
 	}
 	return false
@@ -93,6 +96,8 @@ type model struct {
 
 	phase   bkpPhase
 	tasks   []mirror.Task
+	ctx     context.Context
+	cancel  context.CancelFunc
 	current int
 	err     error
 
@@ -123,9 +128,9 @@ func scanCmd(src, dst string) tea.Cmd {
 	}
 }
 
-func copyCmd(task mirror.Task) tea.Cmd {
+func copyCmd(ctx context.Context, task mirror.Task) tea.Cmd {
 	return func() tea.Msg {
-		r := mirror.Copy(task)
+		r := mirror.Copy(ctx, task)
 		return copyDoneMsg{path: r.Path, bytes: r.Bytes, copied: r.Copied, err: r.Err}
 	}
 }
@@ -141,7 +146,13 @@ func newModel(src, dst string) model {
 		spinner.WithStyle(warningStyle),
 	)
 
-	return model{src: src, dst: dst, scanned: false, bar: bar, spin: spin}
+	return model{
+		src:     src,
+		dst:     dst,
+		scanned: false,
+		bar:     bar,
+		spin:    spin,
+	}
 }
 
 func (m model) Init() tea.Cmd {
@@ -151,8 +162,25 @@ func (m model) Init() tea.Cmd {
 func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 	switch msg := msg.(type) {
 	case tea.KeyPressMsg:
+		// ignore keys while quitting
+		if m.phase == phaseQuitting {
+			return m, nil
+		}
+
 		switch msg.String() {
 		case "esc", "q":
+			if m.phase == phaseCopying || m.phase == phaseStopping {
+				// cancel only if we are not stopping yet
+				if m.phase == phaseCopying && m.cancel != nil {
+					m.cancel()
+				}
+
+				m.phase = phaseQuitting
+
+				// return nil here to wait for the go routines
+				return m, nil
+			}
+
 			m.phase = phaseQuitting
 			return m, tea.Quit
 		case "space":
@@ -162,13 +190,15 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 				}
 
 				m.phase = phaseCopying
+				m.ctx, m.cancel = context.WithCancel(context.Background())
 				m.tasks[m.current].Progress = new(atomic.Int64)
 
-				return m, tea.Batch(copyCmd(m.tasks[m.current]), tickCmd(), m.spin.Tick)
+				return m, tea.Batch(copyCmd(m.ctx, m.tasks[m.current]), tickCmd(), m.spin.Tick)
 			}
 
 			if m.phase == phaseCopying {
-				m.phase = phaseScanned
+				m.phase = phaseStopping
+				m.cancel()
 			}
 		}
 	case spinner.TickMsg:
@@ -203,21 +233,44 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		}
 		return m, tickCmd()
 	case copyDoneMsg:
+		if m.phase == phaseQuitting {
+			return m, tea.Quit
+		}
+
 		if msg.err != nil {
-			m.phase, m.err = phaseError, msg.err
+			if errors.Is(msg.err, context.Canceled) {
+				if m.phase == phaseStopping {
+					m.phase = phaseScanned
+				}
+				return m, nil
+			}
+
+			// copy errored out, release context's resources
+			m.cancel()
+
+			m.phase = phaseError
+			m.err = msg.err
 			return m, nil
 		}
 
 		m.tasks[m.current].Done = msg.copied
 		m.current++
 
+		if m.current >= len(m.tasks) {
+			// copy is done, release context's resources
+			m.cancel()
+
+			m.phase = phaseScanning
+			return m, tea.Batch(scanCmd(m.src, m.dst), m.spin.Tick)
+		}
+
 		if m.phase == phaseCopying {
-			if m.current >= len(m.tasks) {
-				m.phase = phaseScanning
-				return m, tea.Batch(scanCmd(m.src, m.dst), m.spin.Tick)
-			}
 			m.tasks[m.current].Progress = new(atomic.Int64)
-			return m, copyCmd(m.tasks[m.current])
+			return m, copyCmd(m.ctx, m.tasks[m.current])
+		}
+
+		if m.phase == phaseStopping {
+			m.phase = phaseScanned
 		}
 
 		return m, nil
@@ -290,6 +343,10 @@ func (m model) View() tea.View {
 	case phaseCopying:
 		s.WriteString(m.BackupView() + "\n")
 		s.WriteString(m.PhaseView(m.tasks[m.current]) + "\n")
+
+	case phaseStopping:
+		s.WriteString(m.BackupView() + "\n")
+		s.WriteString(m.spin.View() + " " + warningStyle.Render("Stopping...") + "\n")
 
 	case phaseQuitting:
 		if m.scanned {

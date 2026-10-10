@@ -5,6 +5,7 @@
 package mirror
 
 import (
+	"context"
 	"errors"
 	"fmt"
 	"io"
@@ -43,25 +44,32 @@ type ScanResult struct {
 }
 
 type progressWriter struct {
-	w io.Writer
-	n *atomic.Int64
+	w   io.Writer
+	n   *atomic.Int64
+	ctx context.Context
 }
 
 func (pw progressWriter) Write(b []byte) (int, error) {
-	n, err := pw.w.Write(b)
-	pw.n.Add(int64(n))
+	select {
+	case <-pw.ctx.Done():
+		return 0, fmt.Errorf("copy cancelled: %w", pw.ctx.Err())
 
-	if err != nil {
-		return n, fmt.Errorf("write: %w", err)
+	default:
+		n, err := pw.w.Write(b)
+		pw.n.Add(int64(n))
+
+		if err != nil {
+			return n, fmt.Errorf("write: %w", err)
+		}
+
+		return n, nil
 	}
-
-	return n, nil
 }
 
 // Copy mirrors task.Src to task.Dst via an atomic temp-file rename,
 // preserving mode and mtime, and reports bytes written through task.Progress.
-func Copy(task Task) Result {
-	return copyFile(task.Src, task.Dst, task.Progress)
+func Copy(ctx context.Context, task Task) Result {
+	return copyFile(ctx, task.Src, task.Dst, task.Progress)
 }
 
 // Scan walks src and reports the number of regular files needing copy to
@@ -163,7 +171,16 @@ func needsCopy(srcInfo fs.FileInfo, dstPath string) (bool, error) {
 	return false, nil
 }
 
-func copyFile(srcPath, dstPath string, progress *atomic.Int64) Result {
+func copyFile(
+	ctx context.Context,
+	srcPath,
+	dstPath string,
+	progress *atomic.Int64,
+) Result {
+	if ctx.Err() != nil {
+		return Result{Err: ctx.Err()}
+	}
+
 	if progress == nil {
 		progress = new(atomic.Int64)
 	}
@@ -202,7 +219,7 @@ func copyFile(srcPath, dstPath string, progress *atomic.Int64) Result {
 	}()
 	defer func() { _ = tmpFile.Close() }()
 
-	copied, err := io.Copy(progressWriter{tmpFile, progress}, srcFile)
+	copied, err := io.Copy(progressWriter{tmpFile, progress, ctx}, srcFile)
 	if err != nil {
 		return Result{Err: err}
 	}

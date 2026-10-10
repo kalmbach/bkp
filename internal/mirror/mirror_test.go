@@ -1,11 +1,14 @@
 package mirror
 
 import (
+	"bytes"
+	"context"
 	"errors"
 	"io/fs"
 	"os"
 	"path/filepath"
 	"strings"
+	"sync/atomic"
 	"testing"
 	"time"
 )
@@ -165,7 +168,8 @@ func TestCopyFile(t *testing.T) {
 	t.Run("copied", func(t *testing.T) {
 		dstPath := filepath.Join(t.TempDir(), fileName)
 		task := Task{Src: srcPath, Dst: dstPath}
-		result := copyFile(task.Src, task.Dst, task.Progress)
+		ctx := context.Background()
+		result := copyFile(ctx, task.Src, task.Dst, task.Progress)
 		if result.Err != nil {
 			t.Errorf("copyFile() returned error = %v", result.Err)
 		}
@@ -219,7 +223,8 @@ func TestCopyFile(t *testing.T) {
 		defer func() { _ = os.Chmod(dstDir, 0o700) }()
 
 		task := Task{Src: srcPath, Dst: filepath.Join(dstDir, fileName)}
-		result := copyFile(task.Src, task.Dst, task.Progress)
+		ctx := context.Background()
+		result := copyFile(ctx, task.Src, task.Dst, task.Progress)
 		if result.Err == nil {
 			t.Errorf("copyFile() expected error writing read only directory")
 		}
@@ -237,7 +242,8 @@ func TestCopyFile(t *testing.T) {
 		}
 
 		task := Task{Src: srcPath, Dst: dstPath}
-		result := copyFile(task.Src, task.Dst, task.Progress)
+		ctx := context.Background()
+		result := copyFile(ctx, task.Src, task.Dst, task.Progress)
 		if result.Err == nil {
 			t.Error("copyFile() expected error renaming onto a directory")
 		}
@@ -251,6 +257,117 @@ func TestCopyFile(t *testing.T) {
 			if strings.HasPrefix(entry.Name(), ".bkp") {
 				t.Errorf("copyFile() left temp file %s", entry.Name())
 			}
+		}
+	})
+
+	t.Run("cancelled", func(t *testing.T) {
+		dstPath := filepath.Join(t.TempDir(), fileName)
+		task := Task{Src: srcPath, Dst: dstPath}
+		ctx, cancel := context.WithCancel(context.Background())
+		cancel()
+
+		result := copyFile(ctx, task.Src, task.Dst, task.Progress)
+		if !errors.Is(result.Err, context.Canceled) {
+			t.Errorf("copyFile() returned %v, want %v", result.Err, context.Canceled)
+		}
+
+		if result.Copied {
+			t.Errorf("copyFile() returned copied = %t, want %t", true, false)
+		}
+
+		_, err := os.Stat(dstPath)
+		if !errors.Is(err, os.ErrNotExist) {
+			t.Errorf("Stat(%s) returned %v, want %v", dstPath, err, os.ErrNotExist)
+		}
+	})
+}
+
+type countingWriter struct {
+	buf    bytes.Buffer
+	writes int
+}
+
+func (cw *countingWriter) Write(p []byte) (int, error) {
+	cw.writes++
+	return cw.buf.Write(p) //nolint:wrapcheck // test fake, passes the buffer through as is
+}
+
+func TestProgressWriter(t *testing.T) {
+	data := []byte("hello world!")
+
+	t.Run("live context writes through", func(t *testing.T) {
+		inner := &countingWriter{}
+		progress := new(atomic.Int64)
+		pw := progressWriter{w: inner, n: progress, ctx: context.Background()}
+
+		n, err := pw.Write(data)
+		if err != nil {
+			t.Fatalf("Write() returned error = %v", err)
+		}
+
+		if n != len(data) {
+			t.Errorf("Write() returned n = %d, want %d", n, len(data))
+		}
+
+		if got := inner.buf.String(); got != string(data) {
+			t.Errorf("inner writer got %q, want %q", got, data)
+		}
+
+		if got := progress.Load(); got != int64(len(data)) {
+			t.Errorf("progress = %d, want %d", got, len(data))
+		}
+	})
+
+	t.Run("cancelled context does not write", func(t *testing.T) {
+		ctx, cancel := context.WithCancel(context.Background())
+		cancel()
+
+		inner := &countingWriter{}
+		progress := new(atomic.Int64)
+		pw := progressWriter{w: inner, n: progress, ctx: ctx}
+
+		n, err := pw.Write(data)
+		if !errors.Is(err, context.Canceled) {
+			t.Errorf("Write() returned error = %v, want %v", err, context.Canceled)
+		}
+
+		if n != 0 {
+			t.Errorf("Write() returned n = %d, want 0", n)
+		}
+
+		if inner.writes != 0 {
+			t.Errorf("inner writer called %d times, want 0", inner.writes)
+		}
+
+		if got := progress.Load(); got != 0 {
+			t.Errorf("progress = %d, want 0", got)
+		}
+	})
+
+	t.Run("cancels between writes", func(t *testing.T) {
+		ctx, cancel := context.WithCancel(context.Background())
+		defer cancel()
+
+		inner := &countingWriter{}
+		progress := new(atomic.Int64)
+		pw := progressWriter{w: inner, n: progress, ctx: ctx}
+
+		if _, err := pw.Write(data); err != nil {
+			t.Fatalf("first Write() returned error = %v", err)
+		}
+
+		cancel()
+
+		if _, err := pw.Write(data); !errors.Is(err, context.Canceled) {
+			t.Errorf("second Write() returned error = %v, want %v", err, context.Canceled)
+		}
+
+		if inner.writes != 1 {
+			t.Errorf("inner writer called %d times, want 1", inner.writes)
+		}
+
+		if got := progress.Load(); got != int64(len(data)) {
+			t.Errorf("progress = %d, want %d", got, len(data))
 		}
 	})
 }
