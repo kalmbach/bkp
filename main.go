@@ -45,7 +45,7 @@ func main() {
 		return
 	}
 
-	m := newModel(srcPath, dstPath)
+	m := newModel(srcPath, dstPath, 4)
 	p := tea.NewProgram(m)
 
 	if _, err := p.Run(); err != nil {

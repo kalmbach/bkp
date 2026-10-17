@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"slices"
 	"strings"
 	"sync/atomic"
 	"time"
@@ -83,6 +84,7 @@ type copyDoneMsg struct {
 	path   string
 	bytes  int64
 	copied bool
+	index  int
 	err    error
 }
 
@@ -94,12 +96,15 @@ type model struct {
 	files   int64
 	bytes   int64
 
-	phase   bkpPhase
-	tasks   []mirror.Task
-	ctx     context.Context
-	cancel  context.CancelFunc
-	current int
-	err     error
+	phase  bkpPhase
+	tasks  []mirror.Task
+	ctx    context.Context
+	cancel context.CancelFunc
+	err    error
+
+	next     int
+	workers  int
+	inFlight []int
 
 	bar  progress.Model
 	spin spinner.Model
@@ -128,14 +133,14 @@ func scanCmd(src, dst string) tea.Cmd {
 	}
 }
 
-func copyCmd(ctx context.Context, task mirror.Task) tea.Cmd {
+func copyCmd(ctx context.Context, task mirror.Task, i int) tea.Cmd {
 	return func() tea.Msg {
 		r := mirror.Copy(ctx, task)
-		return copyDoneMsg{path: r.Path, bytes: r.Bytes, copied: r.Copied, err: r.Err}
+		return copyDoneMsg{path: r.Path, bytes: r.Bytes, copied: r.Copied, index: i, err: r.Err}
 	}
 }
 
-func newModel(src, dst string) model {
+func newModel(src, dst string, workers int) model {
 	bar := progress.New(
 		progress.WithColors(mochaPeach, mochaMauve),
 		progress.WithWidth(40),
@@ -152,11 +157,26 @@ func newModel(src, dst string) model {
 		scanned: false,
 		bar:     bar,
 		spin:    spin,
+		workers: workers,
 	}
 }
 
 func (m model) Init() tea.Cmd {
 	return tea.Batch(sweepCmd(m.dst), m.spin.Tick)
+}
+
+func (m *model) dispatch() tea.Cmd {
+	var cmds []tea.Cmd
+
+	for len(m.inFlight) < m.workers && m.next < len(m.tasks) {
+		m.inFlight = append(m.inFlight, m.next)
+		m.tasks[m.next].Progress = new(atomic.Int64)
+		cmds = append(cmds, copyCmd(m.ctx, m.tasks[m.next], m.next))
+
+		m.next++
+	}
+
+	return tea.Batch(cmds...)
 }
 
 func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
@@ -191,9 +211,9 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 
 				m.phase = phaseCopying
 				m.ctx, m.cancel = context.WithCancel(context.Background())
-				m.tasks[m.current].Progress = new(atomic.Int64)
 
-				return m, tea.Batch(copyCmd(m.ctx, m.tasks[m.current]), tickCmd(), m.spin.Tick)
+				dispatchCmd := m.dispatch()
+				return m, tea.Batch(dispatchCmd, tickCmd(), m.spin.Tick)
 			}
 
 			if m.phase == phaseCopying {
@@ -223,7 +243,8 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			return m, nil
 		}
 
-		m.current = 0
+		m.next = 0
+		m.inFlight = nil
 		m.phase = phaseScanned
 		m.scanned = true
 		m.tasks, m.files, m.bytes = msg.tasks, msg.files, msg.bytes
@@ -233,15 +254,22 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		}
 		return m, tickCmd()
 	case copyDoneMsg:
+		m.inFlight = slices.DeleteFunc(m.inFlight, func(i int) bool { return i == msg.index })
+
 		if m.phase == phaseQuitting {
-			return m, tea.Quit
+			if len(m.inFlight) == 0 {
+				return m, tea.Quit
+			}
+
+			return m, nil
 		}
 
 		if msg.err != nil {
 			if errors.Is(msg.err, context.Canceled) {
-				if m.phase == phaseStopping {
+				if m.phase == phaseStopping && len(m.inFlight) == 0 {
 					m.phase = phaseScanned
 				}
+
 				return m, nil
 			}
 
@@ -253,10 +281,9 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			return m, nil
 		}
 
-		m.tasks[m.current].Done = msg.copied
-		m.current++
+		m.tasks[msg.index].Done = msg.copied
 
-		if m.current >= len(m.tasks) {
+		if len(m.inFlight) == 0 && m.next >= len(m.tasks) {
 			// copy is done, release context's resources
 			m.cancel()
 
@@ -265,12 +292,14 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		}
 
 		if m.phase == phaseCopying {
-			m.tasks[m.current].Progress = new(atomic.Int64)
-			return m, copyCmd(m.ctx, m.tasks[m.current])
+			dispatchCmd := m.dispatch()
+			return m, dispatchCmd
 		}
 
 		if m.phase == phaseStopping {
-			m.phase = phaseScanned
+			if len(m.inFlight) == 0 {
+				m.phase = phaseScanned
+			}
 		}
 
 		return m, nil
@@ -289,7 +318,7 @@ func (m model) PhaseView(task mirror.Task) string {
 
 	s.WriteString(
 		m.spin.View() + " " + warningStyle.Render(
-			fmt.Sprintf("%d%% %s", int(fraction*100), crumbs.Truncate(task.Dst, 40)),
+			fmt.Sprintf("%d%% %s", int(fraction*100), crumbs.Truncate(task.Dst, 80)),
 		) + "\n",
 	)
 	return s.String()
@@ -342,7 +371,10 @@ func (m model) View() tea.View {
 
 	case phaseCopying:
 		s.WriteString(m.BackupView() + "\n")
-		s.WriteString(m.PhaseView(m.tasks[m.current]) + "\n")
+		for _, i := range m.inFlight {
+			s.WriteString(m.PhaseView(m.tasks[i]))
+		}
+		s.WriteString("\n")
 
 	case phaseStopping:
 		s.WriteString(m.BackupView() + "\n")
