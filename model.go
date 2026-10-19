@@ -355,34 +355,56 @@ func (m model) BackupView() string {
 	return s.String()
 }
 
+func (m model) StoppingView() string {
+	return m.spin.View() + " " + warningStyle.Render("Stopping...") + "\n"
+}
+
+func (m model) ScanningView() string {
+	return m.spin.View() + " " + warningStyle.Render("Scanning...") + "\n"
+}
+
+func (m model) SweepingView() string {
+	return m.spin.View() + " " + warningStyle.Render("Removing orphaned tempfiles...") + "\n"
+}
+
+func (m model) HelpView() string {
+	return faintStyle.Render("space - start/stop, q/esc - quit")
+}
+
 func (m model) View() tea.View {
 	var s strings.Builder
 	s.WriteString(renderHeader(m.dst))
 	s.WriteString("\n\n")
 	switch m.phase {
 	case phaseSweeping:
-		s.WriteString(m.spin.View() + " " + warningStyle.Render("Removing orphaned tempfiles...") + "\n")
+		s.WriteString(m.SweepingView())
 
 	case phaseScanning:
-		s.WriteString(m.spin.View() + " " + warningStyle.Render("Scanning...") + "\n")
+		s.WriteString(m.ScanningView())
 
 	case phaseScanned:
 		s.WriteString(m.BackupView())
 
 	case phaseCopying:
-		s.WriteString(m.BackupView() + "\n")
+		s.WriteString(m.BackupView())
+		s.WriteString("\n")
 		for _, i := range m.inFlight {
 			s.WriteString(m.PhaseView(m.tasks[i]))
 		}
-		s.WriteString("\n")
 
 	case phaseStopping:
-		s.WriteString(m.BackupView() + "\n")
-		s.WriteString(m.spin.View() + " " + warningStyle.Render("Stopping...") + "\n")
+		s.WriteString(m.BackupView())
+		s.WriteString("\n")
+		s.WriteString(m.StoppingView())
 
 	case phaseQuitting:
 		if m.scanned {
-			s.WriteString(m.BackupView() + "\n")
+			s.WriteString(m.BackupView())
+		}
+
+		if len(m.inFlight) > 0 {
+			s.WriteString("\n")
+			s.WriteString(m.StoppingView())
 		}
 
 	case phaseError:
@@ -390,7 +412,8 @@ func (m model) View() tea.View {
 	}
 
 	if m.phase != phaseQuitting {
-		s.WriteString("\n" + faintStyle.Render("space - start/stop, q/esc - quit"))
+		s.WriteString("\n")
+		s.WriteString(m.HelpView())
 	}
 
 	return tea.NewView(s.String())
