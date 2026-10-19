@@ -193,9 +193,8 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 
 		switch msg.String() {
 		case "esc", "q":
-			if m.phase == phaseCopying || m.phase == phaseStopping {
-				// cancel only if we are not stopping yet
-				if m.phase == phaseCopying && m.cancel != nil {
+			if len(m.inFlight) > 0 {
+				if m.cancel != nil {
 					m.cancel()
 				}
 
@@ -278,6 +277,11 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 				return m, nil
 			}
 
+			// don't overwrite previous error
+			if m.phase == phaseError {
+				return m, nil
+			}
+
 			// copy errored out, release context's resources
 			m.cancel()
 
@@ -287,6 +291,10 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		}
 
 		m.tasks[msg.index].Done = msg.copied
+
+		if m.phase == phaseError {
+			return m, nil
+		}
 
 		if len(m.inFlight) == 0 && m.next >= len(m.tasks) {
 			// copy is done, release context's resources
@@ -377,6 +385,10 @@ func (m model) HelpView() string {
 	return faintStyle.Render("space - start/stop, q/esc - quit")
 }
 
+func (m model) ErrorView() string {
+	return warningStyle.Render("Error: ") + warningStyle.Render(m.err.Error()) + "\n"
+}
+
 func (m model) View() tea.View {
 	var s strings.Builder
 	s.WriteString(renderHeader(m.dst))
@@ -413,8 +425,17 @@ func (m model) View() tea.View {
 			s.WriteString(m.StoppingView())
 		}
 
+		if m.err != nil {
+			// don't add an extra blank line if error happened before scan
+			if m.scanned {
+				s.WriteString("\n")
+			}
+
+			s.WriteString(m.ErrorView())
+		}
+
 	case phaseError:
-		s.WriteString(warningStyle.Render("Scan failed: ") + warningStyle.Render(m.err.Error()) + "\n")
+		s.WriteString(m.ErrorView())
 	}
 
 	if m.phase != phaseQuitting {
