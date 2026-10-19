@@ -179,6 +179,10 @@ func (m *model) dispatch() tea.Cmd {
 	return tea.Batch(cmds...)
 }
 
+func (m model) scan() tea.Cmd {
+	return tea.Batch(scanCmd(m.src, m.dst), m.spin.Tick)
+}
+
 func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 	switch msg := msg.(type) {
 	case tea.KeyPressMsg:
@@ -236,7 +240,7 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		}
 
 		m.phase = phaseScanning
-		return m, tea.Batch(scanCmd(m.src, m.dst), m.spin.Tick)
+		return m, m.scan()
 	case scanDoneMsg:
 		if msg.err != nil {
 			m.phase, m.err = phaseError, msg.err
@@ -267,7 +271,8 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		if msg.err != nil {
 			if errors.Is(msg.err, context.Canceled) {
 				if m.phase == phaseStopping && len(m.inFlight) == 0 {
-					m.phase = phaseScanned
+					m.phase = phaseScanning
+					return m, m.scan()
 				}
 
 				return m, nil
@@ -288,7 +293,7 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			m.cancel()
 
 			m.phase = phaseScanning
-			return m, tea.Batch(scanCmd(m.src, m.dst), m.spin.Tick)
+			return m, m.scan()
 		}
 
 		if m.phase == phaseCopying {
@@ -298,7 +303,8 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 
 		if m.phase == phaseStopping {
 			if len(m.inFlight) == 0 {
-				m.phase = phaseScanned
+				m.phase = phaseScanning
+				return m, m.scan()
 			}
 		}
 
