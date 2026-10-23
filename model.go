@@ -35,11 +35,12 @@ var (
 
 const logoArt = "▐▛███▜▌\n▝▜█████▛▘\n  ▘▘ ▝▝"
 
-func renderHeader(dst string) string {
-	l := "\n" + logoStyle.Render(logoArt)
-	t := "\n" + titleStyle.Render("bkp - v"+version)
-	d := "\n" + faintStyle.Render("home -> "+dst)
-	return lipgloss.JoinHorizontal(lipgloss.Top, l, " ", t+d)
+func renderHeader(src, dst string) string {
+	logo := "\n" + logoStyle.Render(logoArt)
+	ver := "\n" + titleStyle.Render("bkp - v"+version)
+	in := "\n" + faintStyle.Render("input: "+src)
+	out := "\n" + faintStyle.Render("output: "+dst)
+	return lipgloss.JoinHorizontal(lipgloss.Top, logo, " ", ver+in+out)
 }
 
 type bkpPhase int
@@ -391,7 +392,7 @@ func (m model) ErrorView() string {
 
 func (m model) View() tea.View {
 	var s strings.Builder
-	s.WriteString(renderHeader(m.dst))
+	s.WriteString(renderHeader(m.src, m.dst))
 	s.WriteString("\n\n")
 	switch m.phase {
 	case phaseSweeping:

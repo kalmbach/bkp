@@ -371,3 +371,140 @@ func TestProgressWriter(t *testing.T) {
 		}
 	})
 }
+
+func TestCheckPath(t *testing.T) {
+	tempDir := t.TempDir()
+	testData := []byte("hello world!")
+	testFile := filepath.Join(tempDir, "testfile")
+	missingFile := filepath.Join(tempDir, "missing")
+
+	if err := os.WriteFile(testFile, testData, 0o644); err != nil {
+		t.Fatal(err)
+	}
+
+	tests := []struct {
+		name string
+		dir  string
+		want error
+	}{
+		{name: "existing dir", dir: tempDir, want: nil},
+		{name: "missing", dir: missingFile, want: fs.ErrNotExist},
+		{name: "regular file", dir: testFile, want: ErrNotDir},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			err := CheckPath(tt.dir)
+			if !errors.Is(err, tt.want) {
+				t.Errorf("CheckPath(%q) = %v; want %v", tt.dir, err, tt.want)
+			}
+		})
+	}
+}
+
+func TestContainmentCheck(t *testing.T) {
+	tempDir := t.TempDir()
+	tempSiblingA := filepath.Join(tempDir, "subdirA")
+	tempSiblingB := filepath.Join(tempDir, "subdirB")
+
+	tests := []struct {
+		name string
+		src  string
+		dst  string
+		want error
+	}{
+		{name: "siblings", src: tempSiblingA, dst: tempSiblingB, want: nil},
+		{name: "same dir", src: tempDir, dst: tempDir, want: ErrSameDir},
+		{name: "dst is child of src", src: tempDir, dst: tempSiblingA, want: ErrDstContainedBySrc},
+		{name: "src is child of dst", src: tempSiblingA, dst: tempDir, want: ErrSrcContainedByDst},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			err := ContainmentCheck(tt.src, tt.dst)
+			if !errors.Is(err, tt.want) {
+				t.Errorf("ContainmentCheck(%q, %q) = %v; want %v", tt.src, tt.dst, err, tt.want)
+			}
+		})
+	}
+}
+
+func TestIsContained(t *testing.T) {
+	tempDir := t.TempDir()
+	tempSiblingA := filepath.Join(tempDir, "subdir")
+	tempSiblingB := filepath.Join(tempDir, "subdirB")
+	tempSiblingC := filepath.Join(tempDir, "..cache")
+
+	tests := []struct {
+		name string
+		src  string
+		dst  string
+		want bool
+	}{
+		{name: "siblings", src: tempSiblingA, dst: tempSiblingB, want: false},
+		{name: "same dir", src: tempDir, dst: tempDir, want: true},
+		{name: "dst is child of src", src: tempDir, dst: tempSiblingA, want: true},
+		{name: "src is child of dst", src: tempSiblingA, dst: tempDir, want: false},
+		{name: "..prefix", src: tempDir, dst: tempSiblingC, want: true},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			got, err := isContained(tt.src, tt.dst)
+			if err != nil {
+				t.Fatal(err)
+			}
+
+			if got != tt.want {
+				t.Errorf("isContained(%q, %q) = %v; want %v", tt.src, tt.dst, got, tt.want)
+			}
+		})
+	}
+}
+
+func TestCanonicalPath(t *testing.T) {
+	tempDir := t.TempDir()
+	realDir := filepath.Join(tempDir, "real")
+	link := filepath.Join(tempDir, "link")
+	missing := filepath.Join(tempDir, "missing")
+
+	if err := os.Mkdir(realDir, 0o755); err != nil {
+		t.Fatal(err)
+	}
+
+	if err := os.Symlink(realDir, link); err != nil {
+		t.Fatal(err)
+	}
+
+	canonical, err := filepath.EvalSymlinks(realDir)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	t.Chdir(realDir)
+
+	tests := []struct {
+		name    string
+		path    string
+		want    string
+		wantErr error
+	}{
+		{name: "real dir", path: realDir, want: canonical},
+		{name: "symlink", path: link, want: canonical},
+		{name: "relative", path: ".", want: canonical},
+		{name: "missing", path: missing, want: "", wantErr: fs.ErrNotExist},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			got, err := CanonicalPath(tt.path)
+			if !errors.Is(err, tt.wantErr) {
+				t.Errorf("CanonicalPath(%q) = %v; want %v", tt.path, err, tt.wantErr)
+			}
+
+			if got != tt.want {
+				t.Errorf("CanonicalPath(%q) = %v; want %v", tt.path, got, tt.want)
+			}
+		})
+	}
+}
