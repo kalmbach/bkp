@@ -3,6 +3,8 @@
 A terminal UI that mirrors one local directory into another, copying
 files concurrently.
 
+![bkp copying files, stopping and resuming](demo.gif)
+
 ## Install
 
 ```
