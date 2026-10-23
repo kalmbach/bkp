@@ -18,6 +18,20 @@ import (
 
 const prefix string = ".bkp-"
 
+var (
+	// ErrNotDir is returned when a path is not a directory.
+	ErrNotDir = errors.New("is not a directory")
+
+	// ErrSameDir is returned when src and dst are the same directory.
+	ErrSameDir = errors.New("src and dst are the same directory")
+
+	// ErrDstContainedBySrc is returned when dst is a subdir of src.
+	ErrDstContainedBySrc = errors.New("dst directory is contained by src directory")
+
+	// ErrSrcContainedByDst is returned when src is a subdir of dst.
+	ErrSrcContainedByDst = errors.New("src directory is contained by dst directory")
+)
+
 // Result reports the outcome of copying a single file.
 type Result struct {
 	Path   string
@@ -154,6 +168,72 @@ func Sweep(dst string) (removed int, err error) {
 	}
 
 	return removed, nil
+}
+
+// CheckPath makes sure path is an eligible directory.
+func CheckPath(path string) error {
+	info, err := os.Stat(path)
+	if err != nil {
+		return fmt.Errorf("checking path: %w", err)
+	}
+
+	if !info.IsDir() {
+		return fmt.Errorf("%s: %w", path, ErrNotDir)
+	}
+
+	return nil
+}
+
+// CanonicalPath resolves symlinks and returns absolute path.
+func CanonicalPath(path string) (string, error) {
+	absolutePath, err := filepath.Abs(path)
+	if err != nil {
+		return "", fmt.Errorf("canonicalization of path: %w", err)
+	}
+
+	normalizedPath, err := filepath.EvalSymlinks(absolutePath)
+	if err != nil {
+		return "", fmt.Errorf("canonicalization of path: %w", err)
+	}
+
+	return normalizedPath, nil
+}
+
+func isContained(a, b string) (bool, error) {
+	check, err := filepath.Rel(a, b)
+	if err != nil {
+		return false, fmt.Errorf("checking path relation: %w", err)
+	}
+
+	return check != ".." && !strings.HasPrefix(check, ".."+string(filepath.Separator)), nil
+}
+
+// ContainmentCheck makes sure neither directory contains the other
+// to avoid circular references.
+func ContainmentCheck(src, dst string) error {
+	if src == dst {
+		return ErrSameDir
+	}
+
+	contained, err := isContained(src, dst)
+	if err != nil {
+		return err
+	}
+
+	if contained {
+		return fmt.Errorf("containment check: %w", ErrDstContainedBySrc)
+	}
+
+	contained, err = isContained(dst, src)
+	if err != nil {
+		return err
+	}
+
+	if contained {
+		return fmt.Errorf("containment check: %w", ErrSrcContainedByDst)
+	}
+
+	return nil
 }
 
 func needsCopy(srcInfo fs.FileInfo, dstPath string) (bool, error) {
