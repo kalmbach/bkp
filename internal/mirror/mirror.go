@@ -174,7 +174,9 @@ func Sweep(dst string) (removed int, err error) {
 func CheckPath(path string) error {
 	info, err := os.Stat(path)
 	if err != nil {
-		return fmt.Errorf("checking path: %w", err)
+		//PathError is self describing
+		//nolint:wrapcheck
+		return err
 	}
 
 	if !info.IsDir() {
