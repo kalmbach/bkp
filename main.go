@@ -14,7 +14,7 @@ import (
 	"github.com/kalmbach/bkp/internal/mirror"
 )
 
-const version = "0.1.0"
+const version = "0.1.1"
 
 func main() {
 	var showVersion bool
@@ -23,6 +23,8 @@ func main() {
 		output  string
 		workers int
 	)
+
+	log.SetFlags(0)
 
 	flag.StringVar(&input, "i", "", "input directory")
 	flag.StringVar(&output, "o", "", "output directory")
