@@ -7,6 +7,7 @@ import (
 	"flag"
 	"fmt"
 	"log"
+	"os"
 
 	tea "charm.land/bubbletea/v2"
 
@@ -29,6 +30,11 @@ func main() {
 	flag.BoolVar(&showVersion, "v", false, "print version and exit (shorthand)")
 	flag.BoolVar(&showVersion, "version", false, "print version and exit")
 	flag.Parse()
+
+	if flag.NFlag() == 0 {
+		flag.Usage()
+		os.Exit(2)
+	}
 
 	if showVersion {
 		fmt.Println(version)
