@@ -16,7 +16,10 @@ import (
 	"sync/atomic"
 )
 
-const prefix string = ".bkp-"
+const (
+	prefix  string      = ".bkp-"
+	dirMode os.FileMode = 0o755
+)
 
 var (
 	// ErrNotDir is returned when a path is not a directory.
@@ -91,6 +94,10 @@ func Copy(ctx context.Context, task Task) Result {
 func Scan(src, dst string) (r ScanResult, err error) {
 	err = filepath.WalkDir(src, func(path string, d fs.DirEntry, err error) error {
 		if err != nil {
+			if errors.Is(err, os.ErrNotExist) {
+				return nil
+			}
+
 			return err
 		}
 
@@ -106,6 +113,10 @@ func Scan(src, dst string) (r ScanResult, err error) {
 		dstPath := filepath.Join(dst, rel)
 		info, err := d.Info()
 		if err != nil {
+			if errors.Is(err, os.ErrNotExist) {
+				return nil
+			}
+
 			return fmt.Errorf("info %s: %w", path, err)
 		}
 
@@ -267,25 +278,25 @@ func copyFile(
 		progress = new(atomic.Int64)
 	}
 
-	srcInfo, err := os.Stat(srcPath)
-	if err != nil {
-		return Result{Err: err}
-	}
-
 	//nolint:gosec // srcPath is the user-provided source tree to mirror
 	srcFile, err := os.Open(srcPath)
 	if err != nil {
+		if errors.Is(err, os.ErrNotExist) {
+			return Result{}
+		}
+
 		return Result{Err: err}
 	}
+
 	defer func() { _ = srcFile.Close() }()
 
-	srcDir := filepath.Dir(srcPath)
-	dirInfo, err := os.Stat(srcDir)
+	srcInfo, err := srcFile.Stat()
 	if err != nil {
 		return Result{Err: err}
 	}
 
-	if err := os.MkdirAll(filepath.Dir(dstPath), dirInfo.Mode().Perm()); err != nil {
+	// create all directories with a writable default mode
+	if err := os.MkdirAll(filepath.Dir(dstPath), dirMode); err != nil {
 		return Result{Err: err}
 	}
 

@@ -280,6 +280,73 @@ func TestCopyFile(t *testing.T) {
 			t.Errorf("Stat(%s) returned %v, want %v", dstPath, err, os.ErrNotExist)
 		}
 	})
+
+	t.Run("vanished", func(t *testing.T) {
+		srcPath := filepath.Join(srcDir, "missing")
+		dstPath := filepath.Join(t.TempDir(), "missing")
+		task := Task{Src: srcPath, Dst: dstPath}
+		ctx := context.Background()
+
+		result := copyFile(ctx, task.Src, task.Dst, task.Progress)
+		if result.Err != nil {
+			t.Errorf("copyFile() returned %v, want %v", result.Err, nil)
+		}
+
+		if result.Copied {
+			t.Errorf("copyFile() returned copied = %t, want %t", true, false)
+		}
+
+		_, err := os.Stat(dstPath)
+		if !errors.Is(err, os.ErrNotExist) {
+			t.Errorf("Stat(%s) returned %v, want %v", dstPath, err, os.ErrNotExist)
+		}
+	})
+
+	t.Run("writable dirs", func(t *testing.T) {
+		testData := []byte("hello world!")
+
+		srcDir := t.TempDir()
+		subDir := filepath.Join(srcDir, "readonly")
+		testFile := filepath.Join(subDir, "testfile")
+
+		if err := os.Mkdir(subDir, 0o755); err != nil {
+			t.Fatal(err)
+		}
+
+		if err := os.WriteFile(testFile, testData, 0o644); err != nil {
+			t.Fatal(err)
+		}
+
+		// make the src subdir read only
+		if err := os.Chmod(subDir, 0o555); err != nil {
+			t.Fatal(err)
+		}
+		defer func() { _ = os.Chmod(subDir, 0o755) }()
+
+		dstDir := t.TempDir()
+		dstFile := filepath.Join(dstDir, "readonly", "testfile")
+		task := Task{Src: testFile, Dst: dstFile}
+		ctx := context.Background()
+
+		result := copyFile(ctx, task.Src, task.Dst, task.Progress)
+
+		if result.Err != nil {
+			t.Errorf("copyFile() returned err = %v, want %v", result.Err, nil)
+		}
+
+		if !result.Copied {
+			t.Errorf("copyFile() returned copied = %t, want %t", false, true)
+		}
+
+		info, err := os.Stat(filepath.Join(dstDir, "readonly"))
+		if err != nil {
+			t.Fatal(err)
+		}
+
+		if info.Mode().Perm()&0o200 == 0 {
+			t.Errorf("copyFile() created a non writable dir")
+		}
+	})
 }
 
 type countingWriter struct {
