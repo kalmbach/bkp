@@ -47,3 +47,4 @@ Press space to start.
 ## Limitations
 
 - Local directories only. There is no network transfer.
+- Directories are created as 0755 and their source permissions aren't preserved.
