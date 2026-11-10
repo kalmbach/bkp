@@ -331,11 +331,13 @@ func (m model) PhaseView(task mirror.Task) string {
 		fraction = float64(task.Progress.Load()) / float64(task.Size)
 	}
 
-	s.WriteString(
-		m.spin.View() + " " + warningStyle.Render(
-			fmt.Sprintf("%d%% %s", int(fraction*100), crumbs.Truncate(task.Dst, 80)),
-		) + "\n",
-	)
+	s.WriteString(m.spin.View())
+	s.WriteString(" ")
+	s.WriteString(warningStyle.Render(
+		fmt.Sprintf("%d%% %s", int(fraction*100), crumbs.Truncate(task.Dst, 80)),
+	))
+	s.WriteString("\n")
+
 	return s.String()
 }
 
@@ -361,8 +363,11 @@ func (m model) BackupView() string {
 
 		size := humanize.Bytes(uint64(bytes))
 
-		s.WriteString(m.bar.ViewAs(fraction) + "\n")
-		s.WriteString(normalStyle.Render(fmt.Sprintf("%d (%s) files to sync.", files, size)) + "\n")
+		s.WriteString(m.bar.ViewAs(fraction))
+		s.WriteString("\n")
+
+		s.WriteString(normalStyle.Render(fmt.Sprintf("%d (%s) files to sync.", files, size)))
+		s.WriteString("\n")
 	} else {
 		s.WriteString(normalStyle.Render("Nothing to sync.\n"))
 	}
